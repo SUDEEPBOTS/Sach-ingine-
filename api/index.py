@@ -13,7 +13,7 @@ SEARCH_ENGINE_ID = os.environ.get('SEARCH_ENGINE_ID')
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 MONGO_URI = os.environ.get('MONGO_URI')
 
-# Photo file ka naam jo tumne root me upload ki hai
+# Local Image Name (Must be uploaded to GitHub root)
 LOCAL_IMAGE_NAME = "banner.png" 
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
@@ -44,33 +44,33 @@ def add_user_to_db(message):
                 }}, upsert=True)
         except: pass
 
-# --- 1. SMART INTENT CHECK (Group ke liye) ---
+# --- 1. SMART INTENT CHECK (AI) ---
 def is_search_query(text):
-    ignore_words = ['hi', 'hello', 'hey', 'gm', 'gn', 'ok', 'thanks', 'admin', 'bot', 'help', 'start']
+    ignore_words = ['hi', 'hello', 'hey', 'gm', 'gn', 'ok', 'thanks', 'admin', 'bot', 'help', 'start', 'bro']
     if text.lower() in ignore_words:
         return False
     try:
+        # Check if text is a media title
         prompt = f"""Analyze this text: "{text}"
         Is this a name of a Movie, Anime, TV Series, or Book? 
-        Or is it a casual chat message?
         Reply ONLY 'YES' if it is media/search content.
         Reply 'NO' if it is chat/greeting/nonsense.
         """
         response = model.generate_content(prompt)
         return "YES" in response.text.upper()
     except:
-        return True
+        return True 
 
 # --- 2. QUERY MAKER ---
 def get_smart_query(user_text):
     try:
         response = model.generate_content(f"""Convert to Search Query.
         Input: "{user_text}"
-        Rules: Default to "in Hindi Dubbed", Add "Telegram Channel link".
+        Rules: Default to "English/Hindi", Add "Telegram Channel".
         Output: ONLY query.""")
         return response.text.strip()
     except:
-        return f"{user_text} in Hindi Dubbed Telegram Channel site:t.me"
+        return f"{user_text} Telegram Channel site:t.me"
 
 # --- 3. SEARCH FUNCTIONS ---
 def get_google_image(user_text):
@@ -111,25 +111,38 @@ def webhook():
         return ''
     return 'Bot is Alive!', 200
 
+# --- NEW GROUP WELCOME ---
+@bot.message_handler(content_types=['new_chat_members'])
+def on_join(message):
+    for member in message.new_chat_members:
+        if member.id == bot.get_me().id:
+            bot.reply_to(message, "<b>Thanks for adding me! 🤖</b>\n\nI can search Movies & Anime directly here.\nJust type the name (e.g., <code>Naruto</code>).", parse_mode="HTML")
+
+# --- START MENU ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     add_user_to_db(message)
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎬 Movies", callback_data="guide_movie"),
-        types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime"),
-        types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122")
+        types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime")
     )
-    caption = "<blockquote><b>👋 Bot Ready!</b>\nNaam likho, main dhoond dunga.</blockquote>"
+    # Add Group Button & Owner
+    markup.add(types.InlineKeyboardButton("➕ Add to Group", url="https://t.me/Animesarchingbot?startgroup=true"))
+    markup.add(types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122"))
+
+    # Blockquote English Message
+    caption = (
+        "<blockquote><b>🤖 Most Powerful Full Anime Search Bot</b>\n\n"
+        "• Search any Anime\n"
+        "• Search any Movie\n"
+        "• Add to your Group and find more content!</blockquote>"
+    )
     
-    # YAHAN CHANGE HAI: Local file ko open karke bhej rahe hain
     try:
-        # 'rb' ka matlab hai read binary mode me file kholo
         with open(LOCAL_IMAGE_NAME, 'rb') as photo_file:
             bot.send_photo(message.chat.id, photo_file, caption=caption, reply_markup=markup, parse_mode="HTML", has_spoiler=True)
-    except Exception as e:
-        # Agar file nahi mili ya koi error aaya to sirf text bhej do
-        print(f"Photo Error: {e}")
+    except Exception:
         bot.send_message(message.chat.id, caption, reply_markup=markup, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
@@ -137,16 +150,16 @@ def delete_message_handler(call):
     try: bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
 
+# --- MAIN SEARCH HANDLER ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     if message.text.startswith('/'): return 
     
-    # --- SMART GROUP LOGIC ---
+    # Smart Group Logic
     if message.chat.type in ['group', 'supergroup']:
         if not is_search_query(message.text):
             return 
-            
-    # --- PROCESSING ---
+    
     add_user_to_db(message)
     bot.send_chat_action(message.chat.id, 'upload_photo')
     
@@ -158,16 +171,27 @@ def handle_message(message):
     if results:
         for item in results:
             markup.add(types.InlineKeyboardButton(f"📂 {item['title']}", url=item['link']))
-        caption = f"<blockquote>🔎 <b>Result:</b> {message.text.title()}</blockquote>"
+        
+        # SPOILER LOGIC
+        if message.chat.type in ['group', 'supergroup']:
+            # Group: Title in Spoiler, Image Blurred
+            caption = f"<span class='tg-spoiler'>🔎 <b>Result:</b> {message.text.title()}</span>"
+            is_spoiler = True
+        else:
+            # Private: Normal Blockquote
+            caption = f"<blockquote>🔎 <b>Result:</b> {message.text.title()}</blockquote>"
+            is_spoiler = False
+            
     else:
-        caption = "<blockquote>😕 <b>Nahi mila.</b> Spelling check karo.</blockquote>"
+        caption = "<blockquote>😕 <b>No results found.</b>\nTry checking the spelling.</blockquote>"
+        is_spoiler = False
         
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
     try:
         if image_url:
-            bot.send_photo(message.chat.id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+            bot.send_photo(message.chat.id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup, has_spoiler=is_spoiler)
         else:
             bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
     except: pass
-
+    
