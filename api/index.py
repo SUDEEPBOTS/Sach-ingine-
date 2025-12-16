@@ -1,23 +1,37 @@
 from flask import Flask, request
 import telebot
 from telebot import types 
+import google.generativeai as genai
 import requests
 import os
 import pymongo
 
-# --- CONFIG ---
+# --- 1. CONFIGURATION (Saari Keys Yahan Hain) ---
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-SEARCH_ENGINE_ID = os.environ.get('SEARCH_ENGINE_ID')
 MONGO_URI = os.environ.get('MONGO_URI')
 
-# Banner URL
+# Search ke liye
+GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY') 
+SEARCH_ENGINE_ID = os.environ.get('SEARCH_ENGINE_ID')
+
+# AI (Gemini) ke liye
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY') 
+
+# Image URL
 BANNER_URL = "https://i.ibb.co/FbFMQpf1/thumb-400-anime-boy-5725.webp"
 
+# --- 2. SETUP (Jo tune bola missing tha) ---
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# --- MONGODB CONNECTION ---
+# Gemini AI Configure kar rahe hain
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    model = genai.GenerativeModel('gemini-2.5-flash')
+else:
+    print("⚠️ GEMINI_API_KEY missing in Vercel!")
+
+# --- 3. MONGODB CONNECTION ---
 db_connected = False
 users_collection = None
 try:
@@ -26,8 +40,9 @@ try:
         db = client['MySearchBotDB']
         users_collection = db['users']
         db_connected = True
-        print("MongoDB Connected")
-except: pass
+        print("✅ MongoDB Connected")
+except Exception as e:
+    print(f"⚠️ MongoDB Error: {e}")
 
 def add_user_to_db(message):
     if db_connected and users_collection is not None:
@@ -41,26 +56,41 @@ def add_user_to_db(message):
                 }}, upsert=True)
         except: pass
 
-# --- HELPER FUNCTIONS ---
+# --- 4. HELPER FUNCTIONS ---
 def delete_user_message(chat_id, message_id):
     try:
         bot.delete_message(chat_id, message_id)
     except: pass
 
+# AI check karega ki ye Movie name hai ya Chat
 def is_search_query(text):
-    ignore_words = ['hi', 'hello', 'hey', 'start', 'help', 'admin']
+    ignore_words = ['hi', 'hello', 'hey', 'start', 'help', 'admin', 'bot', 'kaise ho']
     if text.lower() in ignore_words: return False
+    
+    # Agar Gemini key hai to AI se pucho, nahi to basic check karo
+    if GEMINI_KEY:
+        try:
+            prompt = f"Is '{text}' a movie, anime, or series name? Reply YES or NO."
+            response = model.generate_content(prompt)
+            return "YES" in response.text.upper()
+        except: return True
     return True
 
-# ✅ YAHAN UPDATE KIYA HAI (HINDI DUBBED)
+# Query ko Smart banata hai (Hindi Dubbed add karke)
 def get_smart_query(user_text):
-    # Ye line Google ko specifically "Hindi Dubbed" dhoondne ko bolegi
     return f"{user_text} Hindi Dubbed Telegram Channel"
 
+# --- 5. GOOGLE SEARCH LOGIC (API Key Yahan Use Hoti Hai) ---
 def google_search(query):
     try:
         url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
+        # Dekh bhai, yahan 'key' me GOOGLE_API_KEY ja raha hai
+        params = {
+            'key': GOOGLE_API_KEY, 
+            'cx': SEARCH_ENGINE_ID, 
+            'q': query, 
+            'num': 5
+        }
         res = requests.get(url, params=params).json()
         
         if 'items' not in res: return []
@@ -71,18 +101,26 @@ def google_search(query):
             link = i.get('link', '').split('?')[0]
             results.append({'title': title, 'link': link})
         return results
-    except: return []
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return []
 
 def get_google_image(user_text):
     try:
         url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': user_text + " wallpaper", 'searchType': 'image', 'num': 1}
+        params = {
+            'key': GOOGLE_API_KEY, 
+            'cx': SEARCH_ENGINE_ID, 
+            'q': user_text + " wallpaper", 
+            'searchType': 'image', 
+            'num': 1
+        }
         res = requests.get(url, params=params).json()
         if 'items' in res: return res['items'][0]['link']
     except: pass
     return None
 
-# --- HANDLERS ---
+# --- 6. HANDLERS (Bot Logic) ---
 @app.route('/', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
@@ -94,7 +132,8 @@ def webhook():
         except: return 'Error', 500
     return 'Bot is Alive!', 200
 
-@bot.message_handler(commands=['start', 'help'])
+# Welcome Message
+@app.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     delete_user_message(message.chat.id, message.message_id)
     add_user_to_db(message)
@@ -122,15 +161,18 @@ def send_welcome(message):
     except:
         bot.send_message(message.chat.id, caption, reply_markup=markup, parse_mode="HTML")
 
+# Close Button
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def delete_message_handler(call):
     try: bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
 
+# Main Message Handler
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     if message.text.startswith('/'): return 
     
+    # Group Filtering
     if message.chat.type in ['group', 'supergroup']:
         if not is_search_query(message.text): return
         delete_user_message(message.chat.id, message.message_id)
@@ -141,10 +183,12 @@ def handle_message(message):
     add_user_to_db(message)
     bot.send_chat_action(message.chat.id, 'upload_photo')
     
+    # Search Logic
     query = get_smart_query(message.text)
     results = google_search(query)
     image_url = get_google_image(message.text)
     
+    # Buttons Logic
     markup = types.InlineKeyboardMarkup(row_width=1)
     if results:
         for item in results:
@@ -154,15 +198,16 @@ def handle_message(message):
         end_tag = "</span>" if is_spoiler else "</blockquote>"
         caption = f"{spoiler_tag}🔎 <b>Result:</b> {message.text.title()}{end_tag}"
     else:
-        caption = "<blockquote>😕 <b>No results found.</b>\nTry specific keywords.</blockquote>"
+        caption = "<blockquote>😕 <b>No results found.</b>\n(Check Keys or Spelling)</blockquote>"
         is_spoiler = False
         
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
+    # Sending Logic (Safe)
     try:
         if image_url:
             bot.send_photo(message.chat.id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup, has_spoiler=is_spoiler)
         else:
             bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
     except: pass
-        
+
