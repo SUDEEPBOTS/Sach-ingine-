@@ -1,5 +1,7 @@
-Flask
+flask
 pyTelegramBotAPI>=4.15.0
 google-generativeai
 requests
-Pillow
+pymongo
+dnspython
+
