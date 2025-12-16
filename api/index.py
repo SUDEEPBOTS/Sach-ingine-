@@ -50,7 +50,7 @@ def get_google_image(user_text):
     except: pass
     return None
 
-# --- 3. LINK SEARCH (Returns Data for Buttons) ---
+# --- 3. LINK SEARCH ---
 def google_search(query):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
@@ -61,16 +61,10 @@ def google_search(query):
         results = []
         for i in res['items']:
             title = i.get('title', 'Channel Link')
-            # Title safai (Button me jyada lamba text allowed nahi hota)
             clean_title = title.replace('Telegram:', '').replace('Channel', '').strip()[:30] + "..." 
-            
             raw_link = i.get('link', '')
-            # Link safai
             clean_link = raw_link.replace('/s/', '/').split('?')[0]
-            
-            # List me Dictionary bana ke store karenge
             results.append({'title': clean_title, 'link': clean_link})
-            
         return results
     except Exception as e: return []
 
@@ -85,16 +79,34 @@ def webhook():
         return ''
     return 'Bot is Alive!', 200
 
-# Start Menu
+# --- START MENU (BLUR PHOTO + OWNER ID) ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    welcome_img = "https://cdn-icons-png.flaticon.com/512/2111/2111646.png"
+    # Yahan apni pasand ki photo ka link daal dena
+    welcome_img = "https://ibb.co/4ZHGbkDL"
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # Search Buttons
     markup.add(
         types.InlineKeyboardButton("🎬 Movies", callback_data="guide_movie"),
         types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime")
     )
-    bot.send_photo(message.chat.id, welcome_img, caption="👋 **Search Bot Ready!**\nNaam likho, main dhoond dunga.", reply_markup=markup, parse_mode="Markdown")
+    
+    # Owner & Support Buttons (Tumhari ID set kar di hai)
+    markup.add(
+        types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122"), 
+        types.InlineKeyboardButton("💬 Support", url="https://t.me/Sudeep_support_bot") # Yahan Support link daal dena
+    )
+    
+    # Blockquote Design
+    caption = (
+        "<blockquote><b>👋 Search Bot Ready!</b>\n"
+        "lats start searching anime.</blockquote>"
+    )
+    
+    # has_spoiler=True se photo Blur aayegi
+    bot.send_photo(message.chat.id, welcome_img, caption=caption, reply_markup=markup, parse_mode="HTML", has_spoiler=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('guide_'))
 def guide_buttons(call):
@@ -106,7 +118,7 @@ def delete_message_handler(call):
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
 
-# --- MAIN SEARCH HANDLER (Buttons Wala) ---
+# --- MAIN SEARCH HANDLER ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     if message.text.startswith('/'): return 
@@ -116,33 +128,28 @@ def handle_message(message):
     
     bot.send_chat_action(chat_id, 'upload_photo')
     
-    # 1. Search Data
     query = get_smart_query(user_text)
-    results_list = google_search(query) # Ab ye list wapas karega
+    results_list = google_search(query)
     image_url = get_google_image(user_text)
     
-    # 2. Buttons Banao
-    markup = types.InlineKeyboardMarkup(row_width=1) # Ek line me ek button
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
     if results_list:
         for item in results_list:
-            # Har result ke liye ek Button add karo
             btn = types.InlineKeyboardButton(text=f"📂 {item['title']}", url=item['link'])
             markup.add(btn)
-        
-        caption = f"🔎 **Search Result:** {user_text.title()}"
+        caption = f"<blockquote>🔎 <b>Search Result:</b> {user_text.title()}</blockquote>"
     else:
-        caption = "😕 Koi dhang ka channel nahi mila."
+        caption = "<blockquote>😕 <b>Koi dhang ka channel nahi mila.</b></blockquote>"
     
-    # 3. Close Button Add Karo
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
-    # 4. Send
     try:
         if image_url:
-            bot.send_photo(chat_id, image_url, caption=caption, parse_mode="Markdown", reply_markup=markup)
+            # Result wali photo blur nahi rakhi hai, sirf Start wali rakhi hai
+            bot.send_photo(chat_id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
         else:
-            bot.send_message(chat_id, caption, parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=markup)
     except Exception as e:
         bot.send_message(chat_id, "Error aagaya par koshish jari hai...", reply_markup=markup)
         
