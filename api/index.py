@@ -5,6 +5,7 @@ import google.generativeai as genai
 import requests
 import os
 import pymongo
+import sys
 
 # --- CONFIG ---
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -13,8 +14,24 @@ SEARCH_ENGINE_ID = os.environ.get('SEARCH_ENGINE_ID')
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 MONGO_URI = os.environ.get('MONGO_URI')
 
-# Local Image Name (Must be uploaded to GitHub root)
-LOCAL_IMAGE_NAME = "banner.png" 
+# --- SAFE IMAGE LOADER (CRASH FIX) ---
+# Ye logic file ko dhoondta hai chahe wo root me ho ya api folder me
+def get_banner_file():
+    # Koshish 1: Root folder check karo
+    possible_paths = [
+        os.path.join(os.getcwd(), 'banner.png'),           # Root
+        os.path.join(os.path.dirname(__file__), '../banner.png'), # One step up
+        'banner.png'                                       # Direct
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return open(path, 'rb')
+            
+    return None # Agar file na mile
+
+# Fallback Image (Agar local file fail ho jaye to bot band nahi hoga)
+FALLBACK_URL = "https://i.ibb.co/FbFMQpf1/thumb-400-anime-boy-5725.webp"
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 genai.configure(api_key=GEMINI_KEY)
@@ -44,13 +61,18 @@ def add_user_to_db(message):
                 }}, upsert=True)
         except: pass
 
-# --- 1. SMART INTENT CHECK (AI) ---
+# --- HELPER: DELETE USER MESSAGE ---
+def delete_user_message(chat_id, message_id):
+    try:
+        bot.delete_message(chat_id, message_id)
+    except: pass
+
+# --- SMART INTENT CHECK ---
 def is_search_query(text):
     ignore_words = ['hi', 'hello', 'hey', 'gm', 'gn', 'ok', 'thanks', 'admin', 'bot', 'help', 'start', 'bro']
     if text.lower() in ignore_words:
         return False
     try:
-        # Check if text is a media title
         prompt = f"""Analyze this text: "{text}"
         Is this a name of a Movie, Anime, TV Series, or Book? 
         Reply ONLY 'YES' if it is media/search content.
@@ -61,7 +83,6 @@ def is_search_query(text):
     except:
         return True 
 
-# --- 2. QUERY MAKER ---
 def get_smart_query(user_text):
     try:
         response = model.generate_content(f"""Convert to Search Query.
@@ -72,7 +93,6 @@ def get_smart_query(user_text):
     except:
         return f"{user_text} Telegram Channel site:t.me"
 
-# --- 3. SEARCH FUNCTIONS ---
 def get_google_image(user_text):
     try:
         url = "https://www.googleapis.com/customsearch/v1"
@@ -111,27 +131,25 @@ def webhook():
         return ''
     return 'Bot is Alive!', 200
 
-# --- NEW GROUP WELCOME ---
 @bot.message_handler(content_types=['new_chat_members'])
 def on_join(message):
     for member in message.new_chat_members:
         if member.id == bot.get_me().id:
             bot.reply_to(message, "<b>Thanks for adding me! 🤖</b>\n\nI can search Movies & Anime directly here.\nJust type the name (e.g., <code>Naruto</code>).", parse_mode="HTML")
 
-# --- START MENU ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
+    delete_user_message(message.chat.id, message.message_id)
     add_user_to_db(message)
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎬 Movies", callback_data="guide_movie"),
         types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime")
     )
-    # Add Group Button & Owner
     markup.add(types.InlineKeyboardButton("➕ Add to Group", url="https://t.me/Animesarchingbot?startgroup=true"))
     markup.add(types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122"))
 
-    # Blockquote English Message
     caption = (
         "<blockquote><b>🤖 Most Powerful Full Anime Search Bot</b>\n\n"
         "• Search any Anime\n"
@@ -139,10 +157,16 @@ def send_welcome(message):
         "• Add to your Group and find more content!</blockquote>"
     )
     
+    # Safe Image Logic
+    photo_file = get_banner_file()
     try:
-        with open(LOCAL_IMAGE_NAME, 'rb') as photo_file:
+        if photo_file:
             bot.send_photo(message.chat.id, photo_file, caption=caption, reply_markup=markup, parse_mode="HTML", has_spoiler=True)
-    except Exception:
+            photo_file.close() # File band karna zaroori hai
+        else:
+            # Agar file nahi mili to URL use karo
+            bot.send_photo(message.chat.id, FALLBACK_URL, caption=caption, reply_markup=markup, parse_mode="HTML", has_spoiler=True)
+    except Exception as e:
         bot.send_message(message.chat.id, caption, reply_markup=markup, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
@@ -150,15 +174,13 @@ def delete_message_handler(call):
     try: bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
 
-# --- MAIN SEARCH HANDLER ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     if message.text.startswith('/'): return 
     
-    # Smart Group Logic
     if message.chat.type in ['group', 'supergroup']:
-        if not is_search_query(message.text):
-            return 
+        if not is_search_query(message.text): return 
+        delete_user_message(message.chat.id, message.message_id)
     
     add_user_to_db(message)
     bot.send_chat_action(message.chat.id, 'upload_photo')
@@ -172,16 +194,12 @@ def handle_message(message):
         for item in results:
             markup.add(types.InlineKeyboardButton(f"📂 {item['title']}", url=item['link']))
         
-        # SPOILER LOGIC
         if message.chat.type in ['group', 'supergroup']:
-            # Group: Title in Spoiler, Image Blurred
             caption = f"<span class='tg-spoiler'>🔎 <b>Result:</b> {message.text.title()}</span>"
             is_spoiler = True
         else:
-            # Private: Normal Blockquote
             caption = f"<blockquote>🔎 <b>Result:</b> {message.text.title()}</blockquote>"
             is_spoiler = False
-            
     else:
         caption = "<blockquote>😕 <b>No results found.</b>\nTry checking the spelling.</blockquote>"
         is_spoiler = False
