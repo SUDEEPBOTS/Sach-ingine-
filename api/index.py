@@ -83,7 +83,7 @@ def webhook():
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     # Yahan apni pasand ki photo ka link daal dena
-    welcome_img = "https://ibb.co/4ZHGbkDL"
+    welcome_img = "Https://i.ibb.co/FbFMQpf1/thumb-400-anime-boy-5725.webp"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
@@ -140,7 +140,7 @@ def handle_message(message):
             markup.add(btn)
         caption = f"<blockquote>🔎 <b>Search Result:</b> {user_text.title()}</blockquote>"
     else:
-        caption = "<blockquote>😕 <b>Koi dhang ka channel nahi mila.</b></blockquote>"
+        caption = "<blockquote>😕 <b>NOT FUND TRY AGAIN.</b></blockquote>"
     
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
