@@ -1,6 +1,6 @@
 from flask import Flask, request
 import telebot
-from telebot import types # Button ke liye
+from telebot import types 
 import google.generativeai as genai
 import requests
 import os
@@ -28,20 +28,44 @@ def get_smart_query(user_text):
     except:
         return f"{user_text} Hindi Dubbed site:t.me"
 
-# --- SEARCH LOGIC ---
+# --- 1. IMAGE SEARCH FUNCTION (New) ---
+def get_google_image(user_text):
+    # Hum query me "poster wallpaper" jod denge achi photo ke liye
+    img_query = user_text + " movie anime poster wallpaper hd"
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        'key': GOOGLE_API_KEY,
+        'cx': SEARCH_ENGINE_ID,
+        'q': img_query,
+        'searchType': 'image',  # Image maang rahe hain
+        'num': 1,               # Sirf 1 photo chahiye
+        'imgSize': 'large',     # Badi photo
+        'safe': 'active'
+    }
+    try:
+        res = requests.get(url, params=params, timeout=5).json()
+        if 'items' in res:
+            return res['items'][0]['link'] # Pehli image ka URL
+    except:
+        pass
+    return None # Agar photo nahi mili
+
+# --- 2. LINK SEARCH FUNCTION (Clean) ---
 def google_search(query):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
     try:
-        res = requests.get(url, params=params).json()
+        res = requests.get(url, params=params, timeout=5).json()
         if 'items' not in res: return []
         
         results = []
         for i in res['items']:
             title = i.get('title', 'Link')
             raw_link = i.get('link', '')
-            clean_link = raw_link.replace('/s/', '/') # Link Fix
-            results.append(f"🎬 **{title}**\n🔗 {clean_link}")
+            # Clean Link Logic
+            clean_link = raw_link.replace('/s/', '/').split('?')[0]
+            results.append(f"🔹 **{title}**\n🔗 {clean_link}")
+            
         return results
     except Exception as e: return [f"Error: {e}"]
 
@@ -56,53 +80,55 @@ def webhook():
         return ''
     return 'Bot is Alive!', 200
 
-# 1. Start Command
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 **Bol Bhai!** Movie ya Anime ka naam likh, main link dhoondta hu.")
+    bot.reply_to(message, "👋 **Bol Bhai!** Movie ya Anime ka naam likh, main Banner ke saath link lata hu.")
 
-# 2. Callback Handler (Delete Button Logic)
+# Close Button Logic
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def delete_message_handler(call):
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass # Agar message pehle hi delete ho gaya ho
+    except: pass
 
-# 3. Main Search Handler
+# --- MAIN HANDLER (Photo Wala) ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     if message.text.startswith('/'): return 
     
-    # Typing action
-    bot.send_chat_action(message.chat.id, 'typing')
+    chat_id = message.chat.id
+    user_text = message.text
     
-    # Pehle "Searching" message bhejo
-    msg = bot.send_message(message.chat.id, "🔍 *Dhoond raha hu...*", parse_mode="Markdown")
+    # Action change: Ab "uploading photo" dikhayega
+    bot.send_chat_action(chat_id, 'upload_photo')
     
-    query = get_smart_query(message.text)
+    # 1. Cheezein dhoondo
+    query = get_smart_query(user_text)
     links = google_search(query)
+    image_url = get_google_image(user_text)
     
-    # Close Button Banao
+    # 2. Caption banao (Text jo photo ke niche aayega)
+    caption = f"🎬 **Search Result:** {user_text.title()}\n\n"
+    if links:
+        caption += "\n\n".join(links)
+    else:
+        caption += "😕 Links nahi mile, par poster mil gaya!"
+    
+    # 3. Close Button Banao
     markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("❌ Close / Delete", callback_data="delete_msg")
+    btn = types.InlineKeyboardButton("❌ Close Results", callback_data="delete_msg")
     markup.add(btn)
     
-    if links:
-        response = f"🎯 **Result:** `{query}`\n\n" + "\n\n".join(links)
-    else:
-        response = f"😕 **Kuch nahi mila.**\nTry: `{query}`"
-
-    # Message ko EDIT karo (Naya nahi bhejega) + Button lagao
+    # 4. Bhejo (Photo ya Text Fallback)
     try:
-        bot.edit_message_text(
-            response, 
-            chat_id=message.chat.id, 
-            message_id=msg.message_id, 
-            parse_mode="Markdown",
-            reply_markup=markup,  # Button add kiya
-            disable_web_page_preview=True # Chat clean rakhne ke liye preview off
-        )
-    except:
-        bot.send_message(message.chat.id, response, reply_markup=markup)
+        if image_url:
+            # Agar photo mili toh Photo bhejo
+            bot.send_photo(chat_id, image_url, caption=caption, parse_mode="Markdown", reply_markup=markup)
+        else:
+            # Agar photo nahi mili toh normal text bhejo
+            bot.send_message(chat_id, caption, parse_mode="Markdown", reply_markup=markup)
+    except Exception as e:
+        # Agar photo bhejne me error aaye (kabhi kabhi URL block hota hai)
+        bot.send_message(chat_id, f"Photo error, par links ye rahe:\n{caption}", parse_mode="Markdown", reply_markup=markup)
+
         
