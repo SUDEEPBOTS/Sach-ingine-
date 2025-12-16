@@ -209,3 +209,6 @@ def msg(m):
     else:
         bot.send_message(m.chat.id, caption,
                          parse_mode="HTML", reply_markup=kb)
+
+# ---- VERCEL WSGI ENTRYPOINT ----
+application = app
