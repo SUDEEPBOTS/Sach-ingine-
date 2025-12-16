@@ -22,8 +22,8 @@ def get_smart_query(user_text):
         prompt = f"""Convert to Google Search Query.
         Input: "{user_text}"
         Rules: 
-        1. Default to "Hindi Dubbed" if language missing.
-        2. ALWAYS Add "Telegram Channel" in the query.
+        1. Default to "in Hindi Dubbed" if language missing.
+        2. ALWAYS Add "Telegram Channel link " in the query.
         3. Default site is "site:t.me".
         Output: ONLY the query string."""
         response = model.generate_content(prompt)
