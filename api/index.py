@@ -6,10 +6,11 @@ import os
 import pymongo
 import google.generativeai as genai
 
-# --- CONFIG ---
+# --- 1. CONFIGURATION ---
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-SEARCH_ENGINE_ID = os.environ.get('SEARCH_ENGINE_ID')
+# Nayi wali ID (jo tumne bheji thi)
+SEARCH_ENGINE_ID = "4322c10a72e6944a7" 
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 MONGO_URI = os.environ.get('MONGO_URI')
 
@@ -18,25 +19,26 @@ BANNER_URL = "https://i.ibb.co/FbFMQpf1/thumb-400-anime-boy-5725.webp"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
-# --- DEBUG: CHECK KEYS ON START ---
-print(f"DEBUG: Token Present? {bool(TOKEN)}")
-print(f"DEBUG: Google Key Present? {bool(GOOGLE_API_KEY)}")
-print(f"DEBUG: Engine ID Present? {bool(SEARCH_ENGINE_ID)}")
+# --- 2. GEMINI AI SETUP (Ye raha tumhara Model) ---
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    print("✅ Gemini AI Connected")
+else:
+    model = None
+    print("⚠️ Gemini Key Missing")
 
-# --- MONGODB ---
-db_connected = False
-users_collection = None
+# --- 3. MONGODB SETUP ---
 try:
     if MONGO_URI:
         client = pymongo.MongoClient(MONGO_URI)
         db = client['MySearchBotDB']
         users_collection = db['users']
-        db_connected = True
 except: pass
 
 def add_user_to_db(message):
-    if db_connected and users_collection is not None:
-        try:
+    try:
+        if users_collection is not None:
             users_collection.update_one(
                 {'_id': message.chat.id}, 
                 {'$set': {
@@ -44,50 +46,50 @@ def add_user_to_db(message):
                     'username': message.chat.username,
                     'type': message.chat.type
                 }}, upsert=True)
-        except: pass
+    except: pass
 
 def delete_user_message(chat_id, message_id):
     try: bot.delete_message(chat_id, message_id)
     except: pass
 
+# --- 4. SMART AI INTENT CHECK (Gemini Logic) ---
+def is_search_query(text):
+    # Basic words ko ignore karo (Quota bachane ke liye)
+    ignore_words = ['hi', 'hello', 'hey', 'start', 'help', 'admin', 'kaise ho', 'gm', 'gn']
+    if text.lower() in ignore_words: return False
+    
+    # Gemini AI se pucho: "Kya ye Anime/Movie ka naam hai?"
+    if model:
+        try:
+            prompt = f"Analyze text: '{text}'. Is this a Movie, Anime, Series, or Book name? Reply ONLY 'YES' or 'NO'."
+            response = model.generate_content(prompt)
+            # Agar AI 'YES' bole, to Search karo
+            return "YES" in response.text.upper()
+        except Exception as e:
+            print(f"AI Error: {e}")
+            return True # Agar AI fail ho to safe side Search kar lo
+    return True
+
+# Query Builder
 def get_smart_query(user_text):
     return f"{user_text} Hindi Dubbed Telegram Channel"
 
-# --- DEBUG SEARCH FUNCTION ---
+# --- 5. GOOGLE SEARCH ---
 def google_search(query):
-    # 1. Pehle check karo Keys hain ya nahi
-    if not GOOGLE_API_KEY or not SEARCH_ENGINE_ID:
-        return ["ERROR: API Key or Engine ID is Missing in Vercel Settings!"]
-
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        'key': GOOGLE_API_KEY, 
-        'cx': SEARCH_ENGINE_ID, 
-        'q': query, 
-        'num': 5
-    }
-    
     try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
         res = requests.get(url, params=params).json()
         
-        # 2. Agar Google ne Error diya, toh wo return karo
-        if 'error' in res:
-            error_msg = res['error']['message']
-            print(f"Google API Error: {error_msg}")
-            return [f"GOOGLE ERROR: {error_msg}"]
-            
-        if 'items' not in res: 
-            return [] # Sach me koi result nahi mila
-            
+        if 'items' not in res: return []
+        
         results = []
         for i in res['items']:
             title = i.get('title', 'Link').replace('Telegram:', '').strip()[:30] + "..."
             link = i.get('link', '').split('?')[0]
             results.append({'title': title, 'link': link})
         return results
-
-    except Exception as e:
-        return [f"CODE ERROR: {str(e)}"]
+    except: return []
 
 def get_google_image(user_text):
     try:
@@ -98,7 +100,7 @@ def get_google_image(user_text):
     except: pass
     return None
 
-# --- HANDLERS ---
+# --- 6. HANDLERS ---
 @app.route('/', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
@@ -114,17 +116,36 @@ def webhook():
 def send_welcome(message):
     delete_user_message(message.chat.id, message.message_id)
     add_user_to_db(message)
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🎬 Movies", callback_data="guide_movie"),
-        types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime"),
-        types.InlineKeyboardButton("➕ Add to Group", url="https://t.me/Animesarchingbot?startgroup=true")
+        types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime")
     )
-    caption = "<b>🤖 Bot Ready!</b>\nSearch something to test."
+    markup.add(types.InlineKeyboardButton("➕ Add to Group", url="https://t.me/Animesarchingbot?startgroup=true"))
+    markup.add(
+        types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122"),
+        types.InlineKeyboardButton("💬 Support", url="https://t.me/Sudeep_support_bot")
+    )
+    
+    caption = (
+        "<blockquote><b>🤖 Most Powerful Full Anime Search Bot</b>\n\n"
+        "• Search any Anime\n"
+        "• Search any Movie\n"
+        "• Add to Group for more!</blockquote>"
+    )
+    
     try:
-        bot.send_photo(message.chat.id, BANNER_URL, caption=caption, reply_markup=markup, parse_mode="HTML")
+        bot.send_photo(message.chat.id, BANNER_URL, caption=caption, reply_markup=markup, parse_mode="HTML", has_spoiler=True)
     except:
-        bot.send_message(message.chat.id, caption, reply_markup=markup, parse_mode="HTML")
+        bot.send_photo(message.chat.id, BANNER_URL, caption=caption, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("guide_"))
+def guide_callback(call):
+    if call.data == "guide_movie":
+        bot.answer_callback_query(call.id, "Just type Movie Name (e.g. Stree 2)!", show_alert=True)
+    elif call.data == "guide_anime":
+        bot.answer_callback_query(call.id, "Just type Anime Name (e.g. Naruto)!", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def delete_message_handler(call):
@@ -135,9 +156,16 @@ def delete_message_handler(call):
 def handle_message(message):
     if message.text.startswith('/'): return 
     
-    # Group Filtering
+    # --- GROUP AI LOGIC ---
     is_spoiler = False
     if message.chat.type in ['group', 'supergroup']:
+        # Agar message bahut lamba hai to search mat maano
+        if len(message.text) > 50: return 
+        
+        # Yahan Gemini AI check karega ki ye Movie hai ya nahi
+        if not is_search_query(message.text): 
+            return # Agar chat hai to ignore karo
+            
         delete_user_message(message.chat.id, message.message_id)
         is_spoiler = True
     
@@ -150,22 +178,16 @@ def handle_message(message):
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     
-    # --- ERROR CATCHING LOGIC ---
-    if results and isinstance(results[0], str) and ("ERROR" in results[0]):
-        # Agar error aaya hai (String return hua hai instead of Dict)
-        caption = f"⚠️ <b>SYSTEM ERROR:</b>\n\n<code>{results[0]}</code>\n\n(Send this screenshot to Developer)"
-        image_url = None # Error me photo mat dikhao
-    elif results:
-        # Success
+    if results:
         for item in results:
             markup.add(types.InlineKeyboardButton(f"📂 {item['title']}", url=item['link']))
+        
         spoiler_tag = "<span class='tg-spoiler'>" if is_spoiler else "<blockquote>"
         end_tag = "</span>" if is_spoiler else "</blockquote>"
         caption = f"{spoiler_tag}🔎 <b>Result:</b> {message.text.title()}{end_tag}"
     else:
-        # No Results (Sach me nahi mila)
-        caption = "<blockquote>😕 <b>No results found.</b>\nTry checking spelling.</blockquote>"
-    
+        caption = "<blockquote>😕 <b>No results found.</b>\n(Check Spelling)</blockquote>"
+        
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
     try:
