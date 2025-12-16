@@ -122,7 +122,7 @@ def send_welcome(message):
     # Row 3: Owner & Support (ADDED ✅)
     markup.add(
         types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122"),
-        types.InlineKeyboardButton("💬 Support", url="https://t.me/Sudeep_support_bot")
+        types.InlineKeyboardButton("💬 Support", url="https://t.me/+N08m5L1mCTU2NTE1")
     )
     
     caption = (
