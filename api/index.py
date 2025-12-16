@@ -13,44 +13,44 @@ GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 app = Flask(__name__)
 
-# --- GEMINI LOGIC ---
+# --- 1. GEMINI LOGIC ---
 def get_smart_query(user_text):
     try:
         prompt = f"""Convert to Google Search Query.
         Input: "{user_text}"
-        Rules: Default to "Hindi Dubbed" if language missing. Default to "site:t.me" if platform missing.
+        Rules: 
+        1. Default to "Hindi Dubbed" if language missing.
+        2. ALWAYS Add "Telegram Channel" in the query.
+        3. Default site is "site:t.me".
         Output: ONLY the query string."""
         response = model.generate_content(prompt)
         return response.text.strip()
     except:
-        return f"{user_text} Hindi Dubbed site:t.me"
+        return f"{user_text} Hindi Dubbed Telegram Channel site:t.me"
 
-# --- 1. IMAGE SEARCH FUNCTION (New) ---
+# --- 2. IMAGE SEARCH ---
 def get_google_image(user_text):
-    # Hum query me "poster wallpaper" jod denge achi photo ke liye
     img_query = user_text + " movie anime poster wallpaper hd"
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
         'key': GOOGLE_API_KEY,
         'cx': SEARCH_ENGINE_ID,
         'q': img_query,
-        'searchType': 'image',  # Image maang rahe hain
-        'num': 1,               # Sirf 1 photo chahiye
-        'imgSize': 'large',     # Badi photo
+        'searchType': 'image',
+        'num': 1,
+        'imgSize': 'large',
         'safe': 'active'
     }
     try:
         res = requests.get(url, params=params, timeout=5).json()
-        if 'items' in res:
-            return res['items'][0]['link'] # Pehli image ka URL
-    except:
-        pass
-    return None # Agar photo nahi mili
+        if 'items' in res: return res['items'][0]['link']
+    except: pass
+    return None
 
-# --- 2. LINK SEARCH FUNCTION (Clean) ---
+# --- 3. LINK SEARCH (Returns Data for Buttons) ---
 def google_search(query):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
@@ -60,14 +60,19 @@ def google_search(query):
         
         results = []
         for i in res['items']:
-            title = i.get('title', 'Link')
+            title = i.get('title', 'Channel Link')
+            # Title safai (Button me jyada lamba text allowed nahi hota)
+            clean_title = title.replace('Telegram:', '').replace('Channel', '').strip()[:30] + "..." 
+            
             raw_link = i.get('link', '')
-            # Clean Link Logic
+            # Link safai
             clean_link = raw_link.replace('/s/', '/').split('?')[0]
-            results.append(f"🔹 **{title}**\n🔗 {clean_link}")
+            
+            # List me Dictionary bana ke store karenge
+            results.append({'title': clean_title, 'link': clean_link})
             
         return results
-    except Exception as e: return [f"Error: {e}"]
+    except Exception as e: return []
 
 # --- HANDLERS ---
 
@@ -80,18 +85,28 @@ def webhook():
         return ''
     return 'Bot is Alive!', 200
 
+# Start Menu
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 **Bol Bhai!** Movie ya Anime ka naam likh, main Banner ke saath link lata hu.")
+    welcome_img = "https://cdn-icons-png.flaticon.com/512/2111/2111646.png"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🎬 Movies", callback_data="guide_movie"),
+        types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime")
+    )
+    bot.send_photo(message.chat.id, welcome_img, caption="👋 **Search Bot Ready!**\nNaam likho, main dhoond dunga.", reply_markup=markup, parse_mode="Markdown")
 
-# Close Button Logic
+@bot.callback_query_handler(func=lambda call: call.data.startswith('guide_'))
+def guide_buttons(call):
+    bot.answer_callback_query(call.id, "Naam likh kar bhejo!")
+
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def delete_message_handler(call):
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except: pass
 
-# --- MAIN HANDLER (Photo Wala) ---
+# --- MAIN SEARCH HANDLER (Buttons Wala) ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     if message.text.startswith('/'): return 
@@ -99,36 +114,35 @@ def handle_message(message):
     chat_id = message.chat.id
     user_text = message.text
     
-    # Action change: Ab "uploading photo" dikhayega
     bot.send_chat_action(chat_id, 'upload_photo')
     
-    # 1. Cheezein dhoondo
+    # 1. Search Data
     query = get_smart_query(user_text)
-    links = google_search(query)
+    results_list = google_search(query) # Ab ye list wapas karega
     image_url = get_google_image(user_text)
     
-    # 2. Caption banao (Text jo photo ke niche aayega)
-    caption = f"🎬 **Search Result:** {user_text.title()}\n\n"
-    if links:
-        caption += "\n\n".join(links)
+    # 2. Buttons Banao
+    markup = types.InlineKeyboardMarkup(row_width=1) # Ek line me ek button
+    
+    if results_list:
+        for item in results_list:
+            # Har result ke liye ek Button add karo
+            btn = types.InlineKeyboardButton(text=f"📂 {item['title']}", url=item['link'])
+            markup.add(btn)
+        
+        caption = f"🔎 **Search Result:** {user_text.title()}"
     else:
-        caption += "😕 Links nahi mile, par poster mil gaya!"
+        caption = "😕 Koi dhang ka channel nahi mila."
     
-    # 3. Close Button Banao
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("❌ Close Results", callback_data="delete_msg")
-    markup.add(btn)
+    # 3. Close Button Add Karo
+    markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
-    # 4. Bhejo (Photo ya Text Fallback)
+    # 4. Send
     try:
         if image_url:
-            # Agar photo mili toh Photo bhejo
             bot.send_photo(chat_id, image_url, caption=caption, parse_mode="Markdown", reply_markup=markup)
         else:
-            # Agar photo nahi mili toh normal text bhejo
             bot.send_message(chat_id, caption, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
-        # Agar photo bhejne me error aaye (kabhi kabhi URL block hota hai)
-        bot.send_message(chat_id, f"Photo error, par links ye rahe:\n{caption}", parse_mode="Markdown", reply_markup=markup)
-
+        bot.send_message(chat_id, "Error aagaya par koshish jari hai...", reply_markup=markup)
         
