@@ -13,8 +13,7 @@ SEARCH_ENGINE_ID = os.environ.get('SEARCH_ENGINE_ID')
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 MONGO_URI = os.environ.get('MONGO_URI')
 
-# --- SAFE IMAGE URL (100% Working) ---
-# Hum Local File use nahi karenge kyunki wo Vercel par path error de raha hai
+# --- IMAGE URL (Ye kaam kar raha hai) ---
 BANNER_URL = "https://i.ibb.co/FbFMQpf1/thumb-400-anime-boy-5725.webp"
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
@@ -22,7 +21,7 @@ genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 app = Flask(__name__)
 
-# --- MONGODB CONNECTION (Safe Mode) ---
+# --- MONGODB CONNECTION ---
 db_connected = False
 users_collection = None
 try:
@@ -31,9 +30,7 @@ try:
         db = client['MySearchBotDB']
         users_collection = db['users']
         db_connected = True
-        print("✅ MongoDB Connected")
-except Exception as e:
-    print(f"⚠️ MongoDB Error: {e}")
+except: pass
 
 def add_user_to_db(message):
     if db_connected and users_collection is not None:
@@ -47,46 +44,52 @@ def add_user_to_db(message):
                 }}, upsert=True)
         except: pass
 
-# --- HELPER: DELETE MESSAGE ---
+# --- DELETE MESSAGE HELPER ---
 def delete_user_message(chat_id, message_id):
     try:
         bot.delete_message(chat_id, message_id)
     except: pass
 
-# --- SMART AI INTENT ---
+# --- SMART SEARCH LOGIC ---
 def is_search_query(text):
     ignore_words = ['hi', 'hello', 'hey', 'start', 'help', 'admin']
     if text.lower() in ignore_words: return False
-    try:
-        prompt = f"Is '{text}' a movie/anime name? Reply YES or NO."
-        response = model.generate_content(prompt)
-        return "YES" in response.text.upper()
-    except: return True 
+    return True
 
 def get_smart_query(user_text):
-    try:
-        response = model.generate_content(f"Convert '{user_text}' to search query with 'Telegram Channel'.")
-        return response.text.strip()
-    except: return f"{user_text} Telegram Channel site:t.me"
+    # Simple query banao taaki result milne ke chance badh jayein
+    return f"{user_text} Telegram Channel"
 
 def google_search(query):
     try:
         url = "https://www.googleapis.com/customsearch/v1"
         params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': query, 'num': 5}
+        
+        # Request bhejo
         res = requests.get(url, params=params).json()
+        
+        # Agar Google ne Error diya (Quota ya Key Error)
+        if 'error' in res:
+            print(f"Google Error: {res['error']}")
+            return []
+
+        if 'items' not in res: 
+            return []
+            
         results = []
-        if 'items' in res:
-            for i in res['items']:
-                title = i.get('title', 'Link').replace('Telegram:', '').strip()[:30] + "..."
-                link = i.get('link', '').split('?')[0]
-                results.append({'title': title, 'link': link})
+        for i in res['items']:
+            title = i.get('title', 'Link').replace('Telegram:', '').strip()[:30] + "..."
+            link = i.get('link', '').split('?')[0]
+            results.append({'title': title, 'link': link})
         return results
-    except: return []
+    except Exception as e:
+        print(f"Code Error: {e}")
+        return []
 
 def get_google_image(user_text):
     try:
         url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': user_text + " poster", 'searchType': 'image', 'num': 1}
+        params = {'key': GOOGLE_API_KEY, 'cx': SEARCH_ENGINE_ID, 'q': user_text + " wallpaper", 'searchType': 'image', 'num': 1}
         res = requests.get(url, params=params).json()
         if 'items' in res: return res['items'][0]['link']
     except: pass
@@ -108,11 +111,19 @@ def send_welcome(message):
     add_user_to_db(message)
     
     markup = types.InlineKeyboardMarkup(row_width=2)
+    # Row 1: Movies & Anime
     markup.add(
         types.InlineKeyboardButton("🎬 Movies", callback_data="guide_movie"),
         types.InlineKeyboardButton("⛩ Anime", callback_data="guide_anime")
     )
+    # Row 2: Add to Group
     markup.add(types.InlineKeyboardButton("➕ Add to Group", url="https://t.me/Animesarchingbot?startgroup=true"))
+    
+    # Row 3: Owner & Support (ADDED ✅)
+    markup.add(
+        types.InlineKeyboardButton("👤 Owner", url="tg://user?id=6356015122"),
+        types.InlineKeyboardButton("💬 Support", url="https://t.me/Sudeep_support_bot")
+    )
     
     caption = (
         "<blockquote><b>🤖 Most Powerful Full Anime Search Bot</b>\n\n"
@@ -121,13 +132,9 @@ def send_welcome(message):
         "• Add to Group for more!</blockquote>"
     )
     
-    # --- ANTI-CRASH PHOTO SENDER ---
     try:
-        # Pehle Blur ke sath try karo
         bot.send_photo(message.chat.id, BANNER_URL, caption=caption, reply_markup=markup, parse_mode="HTML", has_spoiler=True)
-    except Exception as e:
-        print(f"Spoiler Error: {e}")
-        # Agar error aaye (library old ho), toh normal photo bhejo
+    except:
         bot.send_photo(message.chat.id, BANNER_URL, caption=caption, reply_markup=markup, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
@@ -139,7 +146,7 @@ def delete_message_handler(call):
 def handle_message(message):
     if message.text.startswith('/'): return 
     
-    # Group Filter
+    # Group filter logic
     if message.chat.type in ['group', 'supergroup']:
         if not is_search_query(message.text): return
         delete_user_message(message.chat.id, message.message_id)
@@ -163,20 +170,16 @@ def handle_message(message):
         end_tag = "</span>" if is_spoiler else "</blockquote>"
         caption = f"{spoiler_tag}🔎 <b>Result:</b> {message.text.title()}{end_tag}"
     else:
-        caption = "<blockquote>😕 No results found.</blockquote>"
+        # Error Message change kiya taaki user samjhe
+        caption = "<blockquote>😕 <b>No results found.</b>\n(Check Bot Admin API Keys or Spelling)</blockquote>"
+        is_spoiler = False
         
     markup.add(types.InlineKeyboardButton("❌ Close", callback_data="delete_msg"))
     
     try:
-        # Safe Sending Logic
         if image_url:
-            try:
-                bot.send_photo(message.chat.id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup, has_spoiler=is_spoiler)
-            except:
-                # Agar spoiler fail ho jaye
-                bot.send_photo(message.chat.id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
+            bot.send_photo(message.chat.id, image_url, caption=caption, parse_mode="HTML", reply_markup=markup, has_spoiler=is_spoiler)
         else:
             bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"Error: {e}")
-        
+    except: pass
+
