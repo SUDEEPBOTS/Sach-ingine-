@@ -1,5 +1,5 @@
 flask
-pyTelegramBotAPI
+pyTelegramBotAPI>=4.15.0
 google-generativeai
 requests
 pymongo
